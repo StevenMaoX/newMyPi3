@@ -123,9 +123,17 @@ def _save_point_cloud(res: dict, imgs: torch.Tensor, req: DecodeReq) -> tuple[st
     if os.path.commonpath([DEFAULT_POINT_CLOUD_DIR, save_path]) != DEFAULT_POINT_CLOUD_DIR:
         raise HTTPException(status_code=400, detail="invalid point_cloud_filename")
 
+    # NOTE:
+    # `res["points"]` is on model device (often CUDA), while `imgs` is CPU tensor.
+    # Boolean indexing requires tensor and mask on the same device.
+    # Move both source tensors and mask to CPU before advanced indexing.
+    masks_cpu = masks.detach().cpu()
+    points_cpu = res["points"][0].detach().cpu()
+    rgbs_cpu = imgs.permute(0, 2, 3, 1).detach().cpu()
+
     write_ply(
-        res["points"][0][masks].detach().cpu(),
-        imgs.permute(0, 2, 3, 1)[masks].detach().cpu(),
+        points_cpu[masks_cpu],
+        rgbs_cpu[masks_cpu],
         save_path,
     )
     return save_path, points_count
