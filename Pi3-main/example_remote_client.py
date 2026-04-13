@@ -36,9 +36,20 @@ def main():
     parser.add_argument("--interval", type=int, default=1)
     parser.add_argument("--max_frames", type=int, default=0)
     parser.add_argument(
+        "--save_point_cloud",
+        action="store_true",
+        help="Ask server to save point cloud (.ply) on server side.",
+    )
+    parser.add_argument(
+        "--point_cloud_filename",
+        type=str,
+        default="",
+        help="Optional server-side output filename, e.g. run1.ply",
+    )
+    parser.add_argument(
         "--return_fields",
         type=str,
-        default="waypoints_norm,yaw_deg,camera_poses",
+        default="waypoints_norm,yaw_deg,camera_poses,point_cloud_path,point_cloud_points",
         help="Comma-separated fields",
     )
     args = parser.parse_args()
@@ -48,6 +59,8 @@ def main():
         "frames_b64": [],
         "target_waypoints": args.target_waypoints,
         "return_fields": [x.strip() for x in args.return_fields.split(",") if x.strip()],
+        "save_point_cloud": args.save_point_cloud,
+        "point_cloud_filename": args.point_cloud_filename,
     }
 
     if args.image_dir:
@@ -69,4 +82,3 @@ def main():
 
 if __name__ == "__main__":
     main()
-

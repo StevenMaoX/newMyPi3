@@ -2,6 +2,8 @@ import base64
 import io
 import math
 import os
+import re
+from datetime import datetime
 from contextlib import nullcontext
 from typing import List, Optional
 
@@ -13,7 +15,8 @@ from PIL import Image
 from torchvision import transforms
 
 from pi3.models.pi3 import Pi3
-from pi3.utils.basic import load_images_as_tensor
+from pi3.utils.basic import load_images_as_tensor, write_ply
+from pi3.utils.geometry import depth_edge
 
 
 def _get_device() -> torch.device:
@@ -43,6 +46,20 @@ AUTH_TOKEN = os.getenv("PI3_AUTH_TOKEN", "").strip()
 PIXEL_LIMIT = int(os.getenv("PI3_PIXEL_LIMIT", "255000"))
 DEFAULT_MAX_VELOCITY = float(os.getenv("PI3_DEFAULT_MAX_VELOCITY", "2.2"))
 DEFAULT_MAX_ACCELERATION = float(os.getenv("PI3_DEFAULT_MAX_ACCELERATION", "2.5"))
+DEFAULT_SAVE_POINT_CLOUD = os.getenv("PI3_DEFAULT_SAVE_POINT_CLOUD", "0").strip().lower() in {
+    "1",
+    "true",
+    "yes",
+    "on",
+}
+DEFAULT_POINT_CLOUD_DIR = os.path.abspath(
+    os.getenv(
+        "PI3_POINT_CLOUD_DIR",
+        os.path.join(os.path.dirname(os.path.abspath(__file__)), "cloudpoints"),
+    )
+)
+DEFAULT_POINT_CLOUD_CONF_THRES = float(os.getenv("PI3_POINT_CLOUD_CONF_THRES", "0.1"))
+DEFAULT_POINT_CLOUD_EDGE_RTL = float(os.getenv("PI3_POINT_CLOUD_EDGE_RTL", "0.03"))
 
 DEVICE = _get_device()
 MODEL = _load_model(DEVICE)
@@ -67,6 +84,51 @@ class DecodeReq(BaseModel):
     max_acceleration: float = DEFAULT_MAX_ACCELERATION
     frame_interval: int = 1
     max_frames: int = 0
+    save_point_cloud: bool = DEFAULT_SAVE_POINT_CLOUD
+    point_cloud_filename: Optional[str] = ""
+    point_cloud_conf_thres: float = DEFAULT_POINT_CLOUD_CONF_THRES
+    point_cloud_edge_rtol: float = DEFAULT_POINT_CLOUD_EDGE_RTL
+    point_cloud_skip_edge: bool = True
+
+
+def _sanitize_point_cloud_filename(name: str) -> str:
+    cleaned = os.path.basename((name or "").strip())
+    if not cleaned:
+        ts = datetime.utcnow().strftime("%Y%m%d_%H%M%S_%f")
+        cleaned = f"cloud_{ts}.ply"
+    else:
+        cleaned = re.sub(r"[^A-Za-z0-9._-]", "_", cleaned)
+        if not cleaned.lower().endswith(".ply"):
+            cleaned = f"{cleaned}.ply"
+    return cleaned
+
+
+def _save_point_cloud(res: dict, imgs: torch.Tensor, req: DecodeReq) -> tuple[str, int]:
+    conf_thres = max(float(req.point_cloud_conf_thres), 0.0)
+    edge_rtol = max(float(req.point_cloud_edge_rtol), 0.0)
+
+    masks = torch.sigmoid(res["conf"][..., 0]) > conf_thres
+    if req.point_cloud_skip_edge:
+        non_edge = ~depth_edge(res["local_points"][..., 2], rtol=edge_rtol)
+        masks = torch.logical_and(masks, non_edge)
+    masks = masks[0]
+
+    points_count = int(masks.sum().item())
+    if points_count <= 0:
+        raise HTTPException(status_code=422, detail="point cloud mask is empty after filtering")
+
+    os.makedirs(DEFAULT_POINT_CLOUD_DIR, exist_ok=True)
+    filename = _sanitize_point_cloud_filename(req.point_cloud_filename or "")
+    save_path = os.path.abspath(os.path.join(DEFAULT_POINT_CLOUD_DIR, filename))
+    if os.path.commonpath([DEFAULT_POINT_CLOUD_DIR, save_path]) != DEFAULT_POINT_CLOUD_DIR:
+        raise HTTPException(status_code=400, detail="invalid point_cloud_filename")
+
+    write_ply(
+        res["points"][0][masks].detach().cpu(),
+        imgs.permute(0, 2, 3, 1)[masks].detach().cpu(),
+        save_path,
+    )
+    return save_path, points_count
 
 
 def _resize_to_pi3_shape(images: List[Image.Image], pixel_limit: int = PIXEL_LIMIT) -> torch.Tensor:
@@ -161,6 +223,7 @@ def healthz():
         "device": str(DEVICE),
         "dtype": str(APP_DTYPE),
         "auth_enabled": bool(AUTH_TOKEN),
+        "point_cloud_dir": DEFAULT_POINT_CLOUD_DIR,
     }
 
 
@@ -191,6 +254,11 @@ def decode(req: DecodeReq, authorization: Optional[str] = Header(default=None)):
 
     waypoints, yaws, scale_hint = _poses_to_waypoints(camera_poses, req.target_waypoints)
 
+    point_cloud_path = None
+    point_cloud_points = None
+    if req.save_point_cloud:
+        point_cloud_path, point_cloud_points = _save_point_cloud(res, imgs, req)
+
     full_resp = {
         "waypoints_norm": waypoints,
         "yaw_deg": yaws,
@@ -204,10 +272,11 @@ def decode(req: DecodeReq, authorization: Optional[str] = Header(default=None)):
             "resize_h": int(imgs.shape[2]),
             "resize_w": int(imgs.shape[3]),
         },
+        "point_cloud_path": point_cloud_path,
+        "point_cloud_points": point_cloud_points,
     }
 
     if req.return_fields:
         allowed = set(req.return_fields) | {"reason"}
         return {k: v for k, v in full_resp.items() if k in allowed}
     return full_resp
-

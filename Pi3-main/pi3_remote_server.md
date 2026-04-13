@@ -30,6 +30,12 @@ export PI3_DEVICE=cuda
 
 # optional: custom local checkpoint
 export PI3_CKPT=/path/to/model.safetensors
+
+# optional: default point cloud output directory (default: Pi3-main/cloudpoints)
+export PI3_POINT_CLOUD_DIR=/path/to/Pi3-main/cloudpoints
+
+# optional: always save point cloud for every /decode request (default: 0)
+export PI3_DEFAULT_SAVE_POINT_CLOUD=1
 ```
 
 Start server:
@@ -77,7 +83,12 @@ Client sends:
   "max_velocity": 2.2,
   "max_acceleration": 2.5,
   "frame_interval": 1,
-  "max_frames": 0
+  "max_frames": 0,
+  "save_point_cloud": true,
+  "point_cloud_filename": "run_001.ply",
+  "point_cloud_conf_thres": 0.1,
+  "point_cloud_edge_rtol": 0.03,
+  "point_cloud_skip_edge": true
 }
 ```
 
@@ -95,6 +106,8 @@ Preferred (direct waypoints):
 {
   "waypoints_norm": [[0, 0, 0], [0.3, 0.0, 0.0], [1.0, 0.1, 0.0]],
   "yaw_deg": [0, 2, 4],
+  "point_cloud_path": "/abs/path/to/Pi3-main/cloudpoints/run_001.ply",
+  "point_cloud_points": 248397,
   "max_velocity": 2.2,
   "max_acceleration": 2.5,
   "reason": "pi3_remote_waypoints",
@@ -142,6 +155,8 @@ python example_remote_client.py \
   --endpoint http://YOUR_SERVER_IP:8000/decode \
   --api_key YOUR_OPTIONAL_TOKEN \
   --image_dir /path/to/frames \
+  --save_point_cloud \
+  --point_cloud_filename run_001.ply \
   --target_waypoints 6
 ```
 
@@ -153,4 +168,22 @@ python example_remote_client.py \
   - subtract first pose translation
   - resample to `target_waypoints`
   - normalize by final displacement norm
+- If `save_point_cloud=true`, server saves `.ply` to `Pi3-main/cloudpoints` by default.
 - If your client can consume raw `camera_poses`, keep `remote_accept_raw_pose=true`.
+
+## 7) Push cloudpoints to GitHub and download locally
+
+From `Pi3-main` on server:
+
+```bash
+mkdir -p cloudpoints
+git add cloudpoints
+git commit -m "Add generated point clouds"
+git push origin <your-branch>
+```
+
+Then on local machine:
+
+```bash
+git pull origin <your-branch>
+```
