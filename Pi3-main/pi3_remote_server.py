@@ -164,16 +164,16 @@ def _poses_to_waypoints(camera_poses: np.ndarray, target_n: int = 6):
         idx = np.linspace(0, len(xyz) - 1, target_n, dtype=int)
         xyz = xyz[idx]
 
-    scale = float(max(np.linalg.norm(xyz[-1]), 1e-6))
-    xyz_norm = xyz / scale
+    local = xyz - xyz[0]
+    path_len = float(np.sum(np.linalg.norm(np.diff(local, axis=0), axis=1)))
 
     yaws = []
-    for i in range(len(xyz_norm) - 1):
-        d = xyz_norm[i + 1, :2] - xyz_norm[i, :2]
+    for i in range(len(local) - 1):
+        d = local[i + 1, :2] - local[i, :2]
         yaws.append(float(np.degrees(np.arctan2(d[1], max(abs(d[0]), 1e-6)))))
     yaws.append(yaws[-1] if yaws else 0.0)
 
-    return xyz_norm.tolist(), yaws, scale
+    return local.tolist(), yaws, path_len if path_len > 1e-6 else None
 
 
 def _encode_depth_npz_b64(depth: np.ndarray) -> Optional[str]:
